@@ -9,3 +9,5 @@ build/
 .vscode/
 .idea/
 *.iml
+.superpowers/
+SPECv0.*.txt

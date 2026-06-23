@@ -1,6 +1,6 @@
 # UnicolPDF
 
-A PDF batch processing editor with dark theme, supporting page insert/delete operations with individual page exclusion control.
+A PDF batch processing editor with dark theme, supporting page operations with undo/redo history and crash recovery.
 
 ## Features
 
@@ -8,6 +8,8 @@ A PDF batch processing editor with dark theme, supporting page insert/delete ope
 - **Page Operations** — Insert pages before/after current page, delete pages
 - **Batch Processing** — Apply operations to all non-excluded pages at once (toggle via checkbox or hold Space key)
 - **Per-Page Exclusion** — Mark individual pages to skip during batch operations
+- **History & Undo/Redo** — Full operation history with timeline view; Ctrl+Z to undo, Ctrl+Y to redo
+- **Auto-Save & Crash Recovery** — Auto-saves at configurable intervals; recovers unsaved work on restart
 - **Background Settings** — Set background image with fill/crop/stretch/dense modes; persists across sessions
 - **Page Settings** — Adjust DPI and page aspect ratio with no-loss pixel algorithm
 - **Customizable Shortcuts** — Configure key bindings for all three operations
@@ -15,7 +17,7 @@ A PDF batch processing editor with dark theme, supporting page insert/delete ope
 
 ## Requirements
 
-- Python 3.13+
+- Python 3.10+
 - PyQt6
 - PyMuPDF
 - Pillow
@@ -48,6 +50,8 @@ UnicolPDF/
 │   ├── operation_widget.py # Page operation buttons
 │   ├── page_info_panel.py  # Page info and per-page anti-batch control
 │   ├── batch_panel.py      # Batch mode toggle
+│   ├── history_manager.py  # Undo/redo history with in-memory snapshots
+│   ├── history_panel.py    # History timeline tab widget
 │   ├── tool_panel.py       # Tool sidebar placeholder
 │   └── menu_bar.py         # Application menu
 ├── resources/              # Static assets
@@ -63,6 +67,8 @@ UnicolPDF/
 |-----------|---------|
 | Import PDF | Ctrl+O |
 | Export PDF | Ctrl+S |
+| Undo | Ctrl+Z |
+| Redo | Ctrl+Y |
 | Exit | Ctrl+Q |
 | Batch Mode (hold) | Space |
 

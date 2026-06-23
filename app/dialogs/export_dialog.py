@@ -16,8 +16,6 @@ def show_export_dialog(parent, engine, default_name):
     if not ok or not project_name:
         return None
 
-    project_path = os.path.join(export_dir, project_name)
-    os.makedirs(project_path, exist_ok=True)
-    save_path = os.path.join(project_path, "output.pdf")
+    save_path = os.path.join(export_dir, f"{project_name}.pdf")
     engine.save(save_path)
     return True

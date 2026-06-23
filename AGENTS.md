@@ -1,3 +1,13 @@
+## GitHub 仓库
+
+项目地址：https://github.com/FLMArnold/UnicolPDF
+
+每次 git 前先看 README 还能不能驾驭得了更新内容。如果驾驭不了了，把 README 也更新。
+
+## 绝对禁止
+
+不能修改/删除/上传人工编写的需求文档（SPECv0.1.txt、SPECv0.2.txt、SPECv0.3.txt 等）。这些文件仅本地留存，不应出现在远程仓库中。
+
 ## Python 虚拟环境
 
 运行所有 Python 文件前，先激活虚拟环境：

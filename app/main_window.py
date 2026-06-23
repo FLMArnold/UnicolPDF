@@ -12,6 +12,8 @@ from app.page_info_panel import PageInfoPanel
 from app.operation_widget import OperationWidget
 from app.tool_panel import ToolPanel
 from app.batch_panel import BatchPanel
+from app.history_manager import HistoryManager
+from app.history_panel import HistoryPanel
 from app.menu_bar import build_menu
 from app.dialogs.import_dialog import show_import_dialog
 from app.dialogs.export_dialog import show_export_dialog
@@ -30,6 +32,11 @@ class MainWindow(QMainWindow):
         self._original_pdf_name = "output"
         self._anti_batch_pages = set()
         self._batch_active = False
+        self.history = HistoryManager()
+        self._autosave_counter = 0
+        self._autosave_threshold = 10
+        self._autosave_dir = None
+        self._autosave_path = None
         self._load_settings()
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -64,6 +71,10 @@ class MainWindow(QMainWindow):
         self.batch_panel = BatchPanel()
         self.tab_widget.addTab(self.batch_panel, "工具属性")
 
+        self.history_panel = HistoryPanel()
+        self.tab_widget.addTab(self.history_panel, "历史操作")
+        self.history_panel.entry_clicked.connect(self._on_history_navigate)
+
         left_layout.addWidget(self.tab_widget, 1)
         main_layout.addWidget(left_sidebar)
 
@@ -92,7 +103,14 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self._apply_shortcuts()
 
+        self._undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self._undo_shortcut.activated.connect(self._on_undo)
+        self._redo_shortcut = QShortcut(QKeySequence("Ctrl+Y"), self)
+        self._redo_shortcut.activated.connect(self._on_redo)
+
         QApplication.instance().installEventFilter(self)
+
+        self._check_crash_recovery()
 
     def _on_page_changed(self, index):
         if self.engine.doc:
@@ -108,6 +126,124 @@ class MainWindow(QMainWindow):
 
     def _on_batch_toggled(self, checked):
         self._batch_active = checked
+
+    def _save_history_snapshot(self, description):
+        if not self.engine.doc:
+            return
+        buf = self.engine.save_to_buffer()
+        self.history.add_snapshot(buf, description)
+        self._autosave_counter += 1
+        self._check_autosave()
+        self.history_panel.refresh(self.history.get_display_entries())
+
+    def _on_undo(self):
+        if not self.engine.doc or not self.history.can_undo():
+            return
+        current_buf = self.engine.save_to_buffer()
+        restored = self.history.undo(current_buf)
+        if restored is None:
+            return
+        restored.seek(0)
+        self.engine.close()
+        self.engine.open_from_bytes(restored.read())
+        current = min(self.viewer.current_page(), self.engine.page_count - 1)
+        self.viewer.show_page(current)
+        self.history_panel.refresh(self.history.get_display_entries())
+
+    def _on_redo(self):
+        if not self.engine.doc or not self.history.can_redo():
+            return
+        current_buf = self.engine.save_to_buffer()
+        restored = self.history.redo(current_buf)
+        if restored is None:
+            return
+        restored.seek(0)
+        self.engine.close()
+        self.engine.open_from_bytes(restored.read())
+        current = min(self.viewer.current_page(), self.engine.page_count - 1)
+        self.viewer.show_page(current)
+        self.history_panel.refresh(self.history.get_display_entries())
+
+    def _on_history_navigate(self, rel_idx):
+        if rel_idx == 0 or not self.engine.doc:
+            return
+        current_buf = self.engine.save_to_buffer()
+        restored = self.history.navigate(rel_idx, current_buf)
+        if restored is None:
+            return
+        restored.seek(0)
+        self.engine.close()
+        self.engine.open_from_bytes(restored.read())
+        current = min(self.viewer.current_page(), self.engine.page_count - 1)
+        self.viewer.show_page(current)
+        self.history_panel.refresh(self.history.get_display_entries())
+
+    def _check_autosave(self):
+        if self._autosave_counter < self._autosave_threshold:
+            return
+        self._autosave_counter = 0
+        import tempfile, os, hashlib, json
+        temp_dir = self._autosave_dir or tempfile.gettempdir()
+        hash_str = hashlib.md5(self._original_pdf_name.encode()).hexdigest()[:8]
+        filename = f"unicolpdf_autosave_{hash_str}.unicolbak"
+        filepath = os.path.join(temp_dir, filename)
+        buf = self.engine.save_to_buffer()
+        with open(filepath, "wb") as f:
+            f.write(buf.read())
+        meta_path = filepath + ".meta"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump({"original_name": self._original_pdf_name}, f)
+        self._autosave_path = filepath
+
+    def _cleanup_autosave(self):
+        import os
+        if self._autosave_path:
+            for p in (self._autosave_path, self._autosave_path + ".meta"):
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+        self._autosave_path = None
+
+    def _check_crash_recovery(self):
+        import tempfile, os, glob, json
+        temp_dir = self._autosave_dir or tempfile.gettempdir()
+        pattern = os.path.join(temp_dir, "unicolpdf_autosave_*.unicolbak")
+        files = glob.glob(pattern)
+        if not files:
+            return
+        from PyQt6.QtWidgets import QMessageBox
+        for filepath in files:
+            original_name = "恢复文件"
+            meta_path = filepath + ".meta"
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                        original_name = meta.get("original_name", "恢复文件")
+                except Exception:
+                    pass
+            reply = QMessageBox.question(
+                self, "恢复文件",
+                f"检测到未保存的自动备份文件:\n{os.path.basename(filepath)}\n\n是否恢复？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                with open(filepath, "rb") as f:
+                    data = f.read()
+                self.engine.close()
+                self.engine.open_from_bytes(data)
+                self._original_pdf_name = f"恢复的-{original_name}"
+                self.viewer.show_page(0)
+                self.operation_widget.set_buttons_enabled(True)
+                self.page_info.update_page_info(0, self.engine.page_count)
+            for p in (filepath, filepath + ".meta"):
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
 
     def _on_operation_triggered(self, action_id):
         if not self.engine.doc:
@@ -145,6 +281,8 @@ class MainWindow(QMainWindow):
             if self.engine.page_count <= 1:
                 QMessageBox.warning(self, "警告", "至少保留一页")
                 return
+        desc = {"insert_before": "页面前增", "insert_after": "页面后增", "delete": "页面删除"}[action_id]
+        self._save_history_snapshot(desc)
         self._apply_operation(action_id, current)
         if action_id == "insert_before":
             self._shift_anti_batch_after_insert(current)
@@ -162,6 +300,8 @@ class MainWindow(QMainWindow):
         if action_id == "delete" and len(pages) >= self.engine.page_count:
             QMessageBox.warning(self, "警告", "不能删除所有页面")
             return
+        desc = "批处理-" + {"insert_before": "页面前增", "insert_after": "页面后增", "delete": "页面删除"}[action_id]
+        self._save_history_snapshot(desc)
         for i in reversed(pages):
             self._apply_operation(action_id, i)
         if action_id == "delete":
@@ -175,7 +315,11 @@ class MainWindow(QMainWindow):
         if result:
             pdf_path = result["pdf_path"]
             self._original_pdf_name = os.path.splitext(os.path.basename(pdf_path))[0]
+            self._cleanup_autosave()
             self._anti_batch_pages.clear()
+            self.history.clear()
+            self.history_panel.refresh(self.history.get_display_entries())
+            self._autosave_counter = 0
             count = self.engine.open(pdf_path)
             if count > 0:
                 self.viewer.show_page(0)
@@ -188,6 +332,8 @@ class MainWindow(QMainWindow):
             return
         result = show_export_dialog(self, self.engine, self._original_pdf_name)
         if result:
+            self._cleanup_autosave()
+            self._autosave_counter = 0
             QMessageBox.information(self, "导出成功", "PDF已导出")
 
     def on_background_settings(self):
@@ -210,11 +356,21 @@ class MainWindow(QMainWindow):
             self.engine.set_bg_image(path, mode)
         else:
             self.engine.set_bg_image(None)
+        history_limit = settings.value("history_limit", "20")
+        self.history.set_max_steps(int(history_limit))
+        threshold = settings.value("autosave_threshold", "10")
+        self._autosave_threshold = int(threshold)
+        self._autosave_dir = settings.value("autosave_dir", None)
+        if self._autosave_dir == "":
+            self._autosave_dir = None
 
     def _save_settings(self):
         settings = QSettings("UnicolPDF", "UnicolPDF")
         settings.setValue("bg_image_path", self.engine.bg_image_path or "")
         settings.setValue("bg_mode", self.engine.bg_mode)
+        settings.setValue("history_limit", self.history.max_steps)
+        settings.setValue("autosave_threshold", self._autosave_threshold)
+        settings.setValue("autosave_dir", self._autosave_dir or "")
 
     def on_page_settings(self):
         dlg = PageSettingsDialog(self.engine, self)
@@ -291,11 +447,79 @@ class MainWindow(QMainWindow):
     def _open_pdf_direct(self, pdf_path):
         self._original_pdf_name = os.path.splitext(os.path.basename(pdf_path))[0]
         self._anti_batch_pages.clear()
+        self.history.clear()
+        self.history_panel.refresh(self.history.get_display_entries())
+        self._autosave_counter = 0
         count = self.engine.open(pdf_path)
         if count > 0:
             self.viewer.show_page(0)
             self.operation_widget.set_buttons_enabled(True)
             self.page_info.update_page_info(0, count)
+
+    def on_history_limit_settings(self):
+        from PyQt6.QtWidgets import QInputDialog
+        value, ok = QInputDialog.getInt(
+            self, "历史操作上限", "设置最大历史操作步数:",
+            value=self.history.max_steps, min=1, max=500
+        )
+        if ok:
+            self.history.set_max_steps(value)
+            self._save_settings()
+
+    def on_autosave_settings(self):
+        import tempfile
+        from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
+                                      QLabel, QPushButton, QSpinBox,
+                                      QFileDialog)
+        from PyQt6.QtCore import Qt
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("自动保存设置")
+        dlg.setFixedSize(420, 200)
+        layout = QVBoxLayout(dlg)
+
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(QLabel("路径:"))
+        path_label = QLabel(self._autosave_dir or tempfile.gettempdir())
+        path_label.setWordWrap(True)
+        path_layout.addWidget(path_label, 1)
+
+        def _select_autosave_path():
+            folder = QFileDialog.getExistingDirectory(dlg, "选择自动保存文件夹")
+            if folder:
+                self._autosave_dir = folder
+                path_label.setText(folder)
+
+        def _open_autosave_folder():
+            import subprocess
+            folder = self._autosave_dir or tempfile.gettempdir()
+            subprocess.Popen(["explorer", folder])
+
+        btn_browse = QPushButton("浏览")
+        btn_browse.clicked.connect(_select_autosave_path)
+        btn_open = QPushButton("打开文件夹")
+        btn_open.clicked.connect(_open_autosave_folder)
+        path_layout.addWidget(btn_browse)
+        path_layout.addWidget(btn_open)
+        layout.addLayout(path_layout)
+
+        threshold_layout = QHBoxLayout()
+        threshold_layout.addWidget(QLabel("自动保存阈值:"))
+        threshold_spin = QSpinBox()
+        threshold_spin.setRange(1, 1000)
+        threshold_spin.setValue(self._autosave_threshold)
+        threshold_layout.addWidget(threshold_spin)
+        threshold_layout.addWidget(QLabel("次操作"))
+        threshold_layout.addStretch()
+        layout.addLayout(threshold_layout)
+
+        btn_ok = QPushButton("确认")
+        btn_ok.clicked.connect(dlg.accept)
+        layout.addWidget(btn_ok, 0, Qt.AlignmentFlag.AlignCenter)
+
+        if dlg.exec():
+            self._autosave_threshold = threshold_spin.value()
+            self._save_settings()
 
     def closeEvent(self, event):
         self.engine.close()

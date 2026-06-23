@@ -1,4 +1,5 @@
 import os
+import io
 import fitz
 from PyQt6.QtGui import QImage, QPainter, QColor
 from PyQt6.QtCore import QRect
@@ -187,6 +188,21 @@ class PDFEngine:
             if os.path.exists(path):
                 os.remove(path)
             self.doc.save(path, garbage=4, deflate=True)
+
+    def save_to_buffer(self):
+        buf = io.BytesIO()
+        if self.doc:
+            self.doc.save(buf, garbage=4, deflate=True)
+        buf.seek(0)
+        return buf
+
+    def open_from_bytes(self, data: bytes):
+        self.doc = fitz.open(stream=data, filetype="pdf")
+        if self.doc.page_count > 0:
+            rect = self.doc[0].rect
+            self._page_width = round(rect.width)
+            self._page_height = round(rect.height)
+        return self.page_count
 
     def close(self):
         if self.doc:

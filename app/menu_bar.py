@@ -39,4 +39,14 @@ def build_menu(main_window):
     shortcut_action.triggered.connect(lambda: main_window.on_shortcut_settings())
     settings_menu.addAction(shortcut_action)
 
+    settings_menu.addSeparator()
+
+    history_limit_action = QAction("历史操作上限", main_window)
+    history_limit_action.triggered.connect(lambda: main_window.on_history_limit_settings())
+    settings_menu.addAction(history_limit_action)
+
+    autosave_action = QAction("自动保存设置", main_window)
+    autosave_action.triggered.connect(lambda: main_window.on_autosave_settings())
+    settings_menu.addAction(autosave_action)
+
     return menubar
